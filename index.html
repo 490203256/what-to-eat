@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>今天吃什么 - 转盘决定</title>
+    <style>
+        * {
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            background: linear-gradient(145deg, #f8f9fa 0%, #e9ecef 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            background: rgba(255,255,255,0.5);
+            border-radius: 60px;
+            padding: 20px;
+            backdrop-filter: blur(2px);
+            box-shadow: 0 25px 45px rgba(0,0,0,0.1);
+        }
+        .wheel-wrapper {
+            position: relative;
+            width: min(85vw, 85vh, 400px);
+            height: min(85vw, 85vh, 400px);
+            margin: 0 auto;
+        }
+        canvas {
+            width: 100% !important;
+            height: 100% !important;
+            border-radius: 50%;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.2), 0 0 0 8px white, 0 0 0 12px #ffc107;
+            transition: all 0.2s;
+        }
+        .pointer {
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 20px solid transparent;
+            border-right: 20px solid transparent;
+            border-top: 45px solid #dc3545;
+            filter: drop-shadow(0 4px 6px rgba(0,0,0,0.2));
+            z-index: 10;
+        }
+        .pointer::after {
+            content: "⚡";
+            position: absolute;
+            top: -48px;
+            left: -12px;
+            font-size: 24px;
+            color: white;
+            text-shadow: 0 1px 2px black;
+        }
+        button {
+            background: #2c3e66;
+            border: none;
+            color: white;
+            font-size: 1.6rem;
+            font-weight: bold;
+            padding: 14px 28px;
+            margin: 25px 10px 10px;
+            border-radius: 60px;
+            cursor: pointer;
+            box-shadow: 0 8px 0 #0f1a2e;
+            transition: 0.07s linear;
+            font-family: inherit;
+            width: 160px;
+        }
+        button:active {
+            transform: translateY(4px);
+            box-shadow: 0 4px 0 #0f1a2e;
+        }
+        .result {
+            background: white;
+            padding: 12px 20px;
+            border-radius: 50px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            text-align: center;
+            margin-top: 15px;
+            color: #e67e22;
+            box-shadow: inset 0 1px 4px #0001, 0 5px 12px rgba(0,0,0,0.1);
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .edit-btn {
+            background: #6c757d;
+            box-shadow: 0 5px 0 #3b4045;
+            font-size: 1rem;
+            padding: 10px 20px;
+            width: auto;
+        }
+        @media (max-width: 500px) {
+            button { width: 130px; font-size: 1.2rem; }
+            .result { font-size: 1.2rem; }
+        }
+    </style>
+</head>
+<body>
+<div>
+    <div class="container">
+        <div class="wheel-wrapper">
+            <canvas id="wheelCanvas" width="600" height="600"></canvas>
+            <div class="pointer"></div>
+        </div>
+        <div class="controls">
+            <button id="spinBtn">🍜 转！</button>
+            <button id="resetBtn" class="edit-btn">🔄 重置菜单</button>
+        </div>
+        <div class="result" id="resultText">点击转盘～</div>
+        <div style="font-size: 0.8rem; text-align: center; margin-top: 15px; opacity: 0.6;">✏️ 想改选项？双击转盘任意位置</div>
+    </div>
+</div>
+
+<script>
+    (function(){
+        // ---------- 默认食物列表 ----------
+        const defaultFoods = ["🍲 火锅", "🍜 拉面", "🍚 盖饭", "🥗 沙拉", "🍔 汉堡", "🍣 寿司", "🥟 饺子", "🍕 披萨", "🐟 烤鱼", "🍛 咖喱"];
+        
+        // 当前使用的菜单 (存储为本地)
+        let currentFoods = [...defaultFoods];
+        
+        let segments = [];
+        let angles = [];
+        let currentRotation = 0;   // 当前转盘旋转弧度
+        let spinning = false;
+        let animationId = null;
+        let spinStartTime = 0;
+        let spinDuration = 2000;    // 2秒动画
+        let spinStartRot = 0;
+        let spinTargetRot = 0;
+        
+        const canvas = document.getElementById('wheelCanvas');
+        const ctx = canvas.getContext('2d');
+        const resultDiv = document.getElementById('resultText');
+        
+        // 颜色池 (亮色系)
+        const colorPalette = ["#FFADAD","#FFD6A5","#FDFFB6","#CAFFBF","#9BF6FF","#A0C4FF","#BDB2FF","#FFC6FF","#FBBFCA","#C0F0E8"];
+        
+        // 重新构建分段数据
+        function rebuildSegments() {
+            const n = currentFoods.length;
+            if(n === 0) {
+                // 如果没有选项，临时加一个
+                currentFoods = ["🍽️ 没选项", "添加食物"];
+                rebuildSegments();
+                return;
+            }
+            segments = [];
+            const angleStep = (Math.PI * 2) / n;
+            let startAngle = 0;
+            for(let i=0; i<n; i++){
+                segments.push({
+                    label: currentFoods[i],
+                    start: startAngle,
+                    end: startAngle + angleStep,
+                    color: colorPalette[i % colorPalette.length],
+                    index: i
+                });
+                startAngle += angleStep;
+            }
+            drawWheel();
+        }
+        
+        // 绘制转盘 (根据当前currentRotation)
+        function drawWheel() {
+            if(!ctx) return;
+            const w = canvas.width, h = canvas.height;
+            const centerX = w/2, centerY = h/2;
+            const radius = w/2 * 0.92;
+            ctx.clearRect(0,0,w,h);
+            
+            for(let seg of segments){
+                const start = seg.start + currentRotation;
+                const end = seg.end + currentRotation;
+                ctx.beginPath();
+                ctx.moveTo(centerX, centerY);
+                ctx.arc(centerX, centerY, radius, start, end);
+                ctx.fillStyle = seg.color;
+                ctx.fill();
+                ctx.save();
+                ctx.shadowBlur = 0;
+                ctx.strokeStyle = "white";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                // 绘制文字
+                ctx.restore();
+                ctx.save();
+                ctx.translate(centerX, centerY);
+                ctx.rotate(start + (seg.end - seg.start)/2);
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                const textRadius = radius * 0.7;
+                ctx.font = `bold ${Math.max(14, w/14)}px "Segoe UI", "PingFang SC"`;
+                ctx.fillStyle = "#1f2d3d";
+                ctx.shadowBlur = 0;
+                let label = seg.label;
+                if(label.length > 6) label = label.slice(0,5)+"..";
+                ctx.fillText(label, textRadius, 6);
+                ctx.restore();
+            }
+            // 中心小圆装饰
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius*0.12, 0, 2*Math.PI);
+            ctx.fillStyle = "#f8f9fa";
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius*0.08, 0, 2*Math.PI);
+            ctx.fillStyle = "#ffc107";
+            ctx.fill();
+        }
+        
+        // 根据当前旋转算出指针指向哪个选项 (指针方向固定向上 即 -PI/2)
+        function getCurrentSelection() {
+            if(segments.length === 0) return "无选项";
+            // 指针方向： 12点钟方向 = -PI/2 (向上)
+            const pointerAngle = -Math.PI/2;
+            // 计算在转盘世界中的角度: 实际食物边界相对于转盘起始边界的偏移
+            // 因为转盘旋转 currentRotation, 食物真实边界 = 原始边界 + currentRotation
+            // 指针方向固定，取指针方向相对转盘坐标的“食物原始角度”
+            // 即：指针方向在世界中的角度 = pointerAngle
+            // 需要找到一个 seg 使得  (seg.start + currentRotation) <= pointerAngle <= (seg.end + currentRotation)
+            // 为了方便，将 pointerAngle 归一化到 [0, 2PI)
+            let normPointer = pointerAngle;
+            while(normPointer < 0) normPointer += 2*Math.PI;
+            while(normPointer >= 2*Math.PI) normPointer -= 2*Math.PI;
+            
+            for(let seg of segments){
+                let startNorm = seg.start + currentRotation;
+                let endNorm = seg.end + currentRotation;
+                while(startNorm < 0) startNorm += 2*Math.PI;
+                while(startNorm >= 2*Math.PI) startNorm -= 2*Math.PI;
+                while(endNorm < 0) endNorm += 2*Math.PI;
+                while(endNorm >= 2*Math.PI) endNorm -= 2*Math.PI;
+                
+                if(startNorm < endNorm){
+                    if(normPointer >= startNorm && normPointer <= endNorm) return seg.label;
+                } else {
+                    // 跨越0弧度的情况
+                    if(normPointer >= startNorm || normPointer <= endNorm) return seg.label;
+                }
+            }
+            // fallback
+            return segments[0]?.label || "未知";
+        }
+        
+        // 随机抽取新目标旋转角度 (随机多转几圈)
+        function randomTargetRotation(currentRot){
+            // 随机额外增加 6~20 弧度 (大约1~3圈)
+            const extra = 6 + Math.random() * 14;
+            // 随机落点要落在某个扇区中央附近？不用太复杂，就完全随机最终角度，然后展示结果时自然对应选项
+            let newRot = currentRot + extra;
+            return newRot;
+        }
+        
+        // 动画更新
+        function spinAnimation(now){
+            const elapsed = now - spinStartTime;
+            let t = Math.min(1, elapsed / spinDuration);
+            // 缓动 easeOutCubic
+            const easeOut = 1 - Math.pow(1-t, 3);
+            const newRot = spinStartRot + (spinTargetRot - spinStartRot) * easeOut;
+            currentRotation = newRot;
+            drawWheel();
+            if(t < 1){
+                animationId = requestAnimationFrame(spinAnimation);
+            } else {
+                // 动画结束，最终对准
+                currentRotation = spinTargetRot;
+                drawWheel();
+                spinning = false;
+                const selected = getCurrentSelection();
+                resultDiv.innerHTML = `✨ 今天吃 ${selected} ✨`;
+                // 震动一下效果
+                if(navigator.vibrate) navigator.vibrate(100);
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+        }
+        
+        function startSpin(){
+            if(spinning) return;
+            if(!segments.length) return;
+            spinStartRot = currentRotation;
+            spinTargetRot = randomTargetRotation(currentRotation);
+            spinStartTime = performance.now();
+            spinning = true;
+            resultDiv.innerHTML = "🌀 转起来啦... 🌀";
+            if(animationId) cancelAnimationFrame(animationId);
+            animationId = requestAnimationFrame(spinAnimation);
+        }
+        
+        // 重置菜单为默认
+        function resetToDefault(){
+            currentFoods = [...defaultFoods];
+            saveMenuToLocal();
+            rebuildSegments();
+            resultDiv.innerHTML = "菜单已重置 ✓ 再转一次吧";
+            // 不重置旋转角度，保留当前位置
+            drawWheel();
+        }
+        
+        // 本地存储读取/保存
+        function saveMenuToLocal(){
+            localStorage.setItem("eatWheelMenu", JSON.stringify(currentFoods));
+        }
+        
+        function loadMenuFromLocal(){
+            const saved = localStorage.getItem("eatWheelMenu");
+            if(saved){
+                try{
+                    let arr = JSON.parse(saved);
+                    if(Array.isArray(arr) && arr.length > 0){
+                        currentFoods = arr;
+                        return;
+                    }
+                }catch(e){}
+            }
+            currentFoods = [...defaultFoods];
+        }
+        
+        // 自定义编辑: 弹出修改列表（简单实用）
+        function editMenu(){
+            let newList = prompt("编辑菜单（用中文或英文逗号隔开）\n例如: 火锅,披萨,沙拉,牛肉面\n当前菜单: "+currentFoods.join(","));
+            if(newList !== null && newList.trim() !== ""){
+                let items = newList.split(/[ ,，]+/).filter(s => s.trim().length>0);
+                if(items.length === 0){
+                    alert("至少保留一个选项哦");
+                    return;
+                }
+                // 给每个选项加个emoji装饰（如果没有的话可选简单加）
+                currentFoods = items.map(item => {
+                    item = item.trim();
+                    if(!item.match(/^[\u{1F300}-\u{1F6FF}]/u) && !item.startsWith("🍜") && !item.startsWith("🍲")){
+                        // 不加emoji也可，保持清爽
+                    }
+                    return item;
+                });
+                if(currentFoods.length === 0) currentFoods = ["🍽️ 美食"];
+                saveMenuToLocal();
+                rebuildSegments();
+                resultDiv.innerHTML = "菜单已更新！试试转盘吧";
+                drawWheel();
+            }
+        }
+        
+        // 绑定事件 & 初始化
+        function init(){
+            loadMenuFromLocal();
+            rebuildSegments();
+            document.getElementById('spinBtn').addEventListener('click', startSpin);
+            document.getElementById('resetBtn').addEventListener('click', resetToDefault);
+            // 双击canvas区域快捷编辑菜单
+            canvas.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                editMenu();
+            });
+            // 为防止触摸时缩放，passive
+            drawWheel();
+        }
+        
+        init();
+    })();
+</script>
+</body>
+</html>
